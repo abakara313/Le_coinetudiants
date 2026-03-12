@@ -1,266 +1,204 @@
 import { useEffect, useState } from 'react';
-import { useAuth } from '../contexts/AuthContext';
 import { supabase } from '../lib/supabase';
-import { Copy, Trash2, Mail, RotateCw, Key, Plus } from 'lucide-react';
+import { Shield, UserCheck, UserX, RefreshCw, AlertCircle } from 'lucide-react';
 
-interface Invitation {
+interface ProfileRow {
   id: string;
-  code: string;
-  email?: string;
-  used: boolean;
-  used_by_id?: string;
+  email: string;
+  role: string;
+  phone: string | null;
+  account_status: string;
   created_at: string;
-  used_at?: string;
-  expires_at: string;
 }
 
-export default function AdminPanel() {
-  const { profile } = useAuth();
-  const [invitations, setInvitations] = useState<Invitation[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [newEmail, setNewEmail] = useState('');
-  const [generatingCode, setGeneratingCode] = useState(false);
-  const [copied, setCopied] = useState<string | null>(null);
+const ROLE_OPTIONS = [
+  { value: 'student',   label: 'Étudiant' },
+  { value: 'individual', label: 'Particulier' },
+  { value: 'moderator', label: 'Modérateur' },
+  { value: 'admin',     label: 'Admin' },
+];
 
-  if (profile?.role !== 'admin') {
-    return (
-      <div className="text-center py-12">
-        <p className="text-red-600 font-medium">Accès refusé. Seuls les administrateurs peuvent accéder à ce panneau.</p>
-      </div>
-    );
-  }
+const ROLE_COLORS: Record<string, string> = {
+  admin:      'bg-red-100 text-red-800',
+  moderator:  'bg-purple-100 text-purple-800',
+  student:    'bg-blue-100 text-blue-800',
+  individual: 'bg-green-100 text-green-800',
+};
+
+const STATUS_COLORS: Record<string, string> = {
+  active:    'bg-green-100 text-green-700',
+  suspended: 'bg-red-100 text-red-700',
+  pending:   'bg-yellow-100 text-yellow-700',
+};
+
+export default function AdminPanel() {
+  const [profiles, setProfiles] = useState<ProfileRow[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
+  const [saving, setSaving] = useState<string | null>(null);
 
   useEffect(() => {
-    fetchInvitations();
+    fetchProfiles();
   }, []);
 
-  const fetchInvitations = async () => {
+  const fetchProfiles = async () => {
     setLoading(true);
-    try {
-      const { data, error } = await supabase
-        .from('moderator_invitations')
-        .select('*')
-        .order('created_at', { ascending: false });
+    setError('');
+    const { data, error } = await supabase
+      .from('profiles')
+      .select('id, email, role, phone, account_status, created_at')
+      .order('created_at', { ascending: false });
 
-      if (error) throw error;
-      setInvitations(data || []);
-    } catch (error) {
-      console.error('Error fetching invitations:', error);
-    } finally {
-      setLoading(false);
+    if (error) {
+      setError('Impossible de charger les profils : ' + error.message);
+    } else {
+      setProfiles(data || []);
     }
+    setLoading(false);
   };
 
-  const generateCode = () => {
-    const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
-    let code = 'MOD-';
-    for (let i = 0; i < 12; i++) {
-      code += chars.charAt(Math.floor(Math.random() * chars.length));
+  const updateField = async (userId: string, updates: Record<string, string>) => {
+    setSaving(userId);
+    setError('');
+    const { error } = await supabase
+      .from('profiles')
+      .update(updates)
+      .eq('id', userId);
+
+    if (error) {
+      setError(
+        error.code === '42501'
+          ? 'Accès refusé — la migration SQL n\'a pas été appliquée correctement.'
+          : 'Erreur : ' + error.message
+      );
+    } else {
+      await fetchProfiles();
     }
-    return code;
+    setSaving(null);
   };
-
-  const handleCreateInvitation = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setGeneratingCode(true);
-
-    try {
-      const code = generateCode();
-
-      const { error } = await supabase.from('moderator_invitations').insert([
-        {
-          code,
-          email: newEmail || null,
-          created_by_id: profile?.id,
-        },
-      ]);
-
-      if (error) throw error;
-
-      setNewEmail('');
-      fetchInvitations();
-    } catch (error) {
-      console.error('Error creating invitation:', error);
-      alert('Erreur lors de la création du code');
-    } finally {
-      setGeneratingCode(false);
-    }
-  };
-
-  const handleCopyCode = (code: string) => {
-    navigator.clipboard.writeText(code);
-    setCopied(code);
-    setTimeout(() => setCopied(null), 2000);
-  };
-
-  const handleDeleteInvitation = async (id: string) => {
-    if (!confirm('Êtes-vous sûr de vouloir supprimer cette invitation?')) return;
-
-    try {
-      const { error } = await supabase
-        .from('moderator_invitations')
-        .delete()
-        .eq('id', id);
-
-      if (error) throw error;
-      fetchInvitations();
-    } catch (error) {
-      console.error('Error deleting invitation:', error);
-      alert('Erreur lors de la suppression');
-    }
-  };
-
-  const getStatusBadge = (invitation: Invitation) => {
-    if (invitation.used) {
-      return { label: 'Utilisé', color: 'bg-green-100 text-green-800' };
-    }
-    const expiresAt = new Date(invitation.expires_at);
-    if (expiresAt < new Date()) {
-      return { label: 'Expiré', color: 'bg-gray-100 text-gray-800' };
-    }
-    return { label: 'Actif', color: 'bg-blue-100 text-blue-800' };
-  };
-
-  if (loading) {
-    return (
-      <div className="flex items-center justify-center py-12">
-        <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600"></div>
-      </div>
-    );
-  }
 
   return (
     <div className="space-y-6">
-      <h2 className="text-2xl font-bold text-gray-900 mb-6">Panneau Administrateur</h2>
-
-      <div className="bg-blue-50 border border-blue-200 rounded-xl p-6">
-        <h3 className="font-semibold text-blue-900 mb-4 flex items-center gap-2">
-          <Key size={20} />
-          Créer une invitation modérateur
-        </h3>
-        <form onSubmit={handleCreateInvitation} className="space-y-4">
+      {/* En-tête */}
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-3">
+          <Shield className="text-red-600" size={28} />
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-2">
-              Email (optionnel)
-            </label>
-            <input
-              type="email"
-              value={newEmail}
-              onChange={(e) => setNewEmail(e.target.value)}
-              placeholder="modérateur@example.com"
-              className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-            />
-            <p className="text-xs text-gray-500 mt-1">
-              Si vous spécifiez un email, seule cette personne pourra utiliser ce code
-            </p>
+            <h2 className="text-2xl font-bold text-gray-900">Panneau Admin</h2>
+            <p className="text-sm text-gray-500">Gestion des utilisateurs et des rôles</p>
           </div>
-
-          <button
-            type="submit"
-            disabled={generatingCode}
-            className="w-full bg-blue-600 hover:bg-blue-700 text-white font-medium py-2.5 px-4 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
-          >
-            <Plus size={20} />
-            {generatingCode ? 'Création...' : 'Générer un code'}
-          </button>
-        </form>
+        </div>
+        <button
+          onClick={fetchProfiles}
+          disabled={loading}
+          className="flex items-center gap-2 px-4 py-2 bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200 font-medium disabled:opacity-50"
+        >
+          <RefreshCw size={16} className={loading ? 'animate-spin' : ''} />
+          Actualiser
+        </button>
       </div>
 
-      <div>
-        <h3 className="font-semibold text-gray-900 mb-4 flex items-center gap-2">
-          <Mail size={20} />
-          Codes d'invitation
-        </h3>
+      {/* Erreur globale */}
+      {error && (
+        <div className="flex items-start gap-2 bg-red-50 border border-red-200 text-red-700 p-4 rounded-lg text-sm">
+          <AlertCircle size={18} className="mt-0.5 shrink-0" />
+          <p>{error}</p>
+        </div>
+      )}
 
-        {invitations.length === 0 ? (
-          <div className="text-center py-8 text-gray-500">
-            Aucune invitation créée
-          </div>
-        ) : (
-          <div className="space-y-2">
-            {invitations.map((invitation) => {
-              const badge = getStatusBadge(invitation);
-              const isExpired = new Date(invitation.expires_at) < new Date();
+      {/* Tableau */}
+      {loading ? (
+        <div className="flex items-center justify-center py-12">
+          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-red-600" />
+        </div>
+      ) : (
+        <div className="overflow-x-auto rounded-xl border border-gray-200 shadow-sm">
+          <table className="w-full text-sm">
+            <thead className="bg-gray-50 border-b border-gray-200">
+              <tr>
+                <th className="text-left px-4 py-3 font-semibold text-gray-700">Email</th>
+                <th className="text-left px-4 py-3 font-semibold text-gray-700">Téléphone</th>
+                <th className="text-left px-4 py-3 font-semibold text-gray-700">Rôle actuel</th>
+                <th className="text-left px-4 py-3 font-semibold text-gray-700">Statut</th>
+                <th className="text-left px-4 py-3 font-semibold text-gray-700">Actions</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-gray-100">
+              {profiles.map((p) => (
+                <tr key={p.id} className="hover:bg-gray-50 transition-colors">
+                  {/* Email */}
+                  <td className="px-4 py-3 text-gray-900 font-medium">{p.email}</td>
 
-              return (
-                <div
-                  key={invitation.id}
-                  className={`p-4 rounded-lg border ${
-                    isExpired ? 'bg-gray-50 border-gray-200' : 'bg-white border-gray-200'
-                  } hover:shadow-sm transition-shadow`}
-                >
-                  <div className="flex items-start justify-between">
-                    <div className="flex-1">
-                      <div className="flex items-center gap-2 mb-2">
-                        <code className="font-mono font-bold text-gray-900 text-sm bg-gray-100 px-3 py-1 rounded">
-                          {invitation.code}
-                        </code>
+                  {/* Téléphone */}
+                  <td className="px-4 py-3 text-gray-500 text-xs">
+                    {p.phone || <span className="italic">—</span>}
+                  </td>
+
+                  {/* Rôle */}
+                  <td className="px-4 py-3">
+                    <span className={`px-2 py-1 rounded-full text-xs font-medium ${ROLE_COLORS[p.role] || 'bg-gray-100 text-gray-800'}`}>
+                      {ROLE_OPTIONS.find((r) => r.value === p.role)?.label || p.role}
+                    </span>
+                  </td>
+
+                  {/* Statut */}
+                  <td className="px-4 py-3">
+                    <span className={`px-2 py-1 rounded-full text-xs font-medium ${STATUS_COLORS[p.account_status] || 'bg-gray-100'}`}>
+                      {p.account_status}
+                    </span>
+                  </td>
+
+                  {/* Actions */}
+                  <td className="px-4 py-3">
+                    <div className="flex gap-2 flex-wrap items-center">
+                      {/* Changer le rôle */}
+                      <select
+                        value={p.role}
+                        disabled={saving === p.id}
+                        onChange={(e) => updateField(p.id, { role: e.target.value })}
+                        className="text-xs px-2 py-1.5 border border-gray-300 rounded-lg bg-white text-gray-700 focus:ring-2 focus:ring-blue-500 disabled:opacity-50 cursor-pointer"
+                      >
+                        {ROLE_OPTIONS.map((opt) => (
+                          <option key={opt.value} value={opt.value}>{opt.label}</option>
+                        ))}
+                      </select>
+
+                      {/* Suspendre / Réactiver */}
+                      {p.account_status === 'active' ? (
                         <button
-                          onClick={() => handleCopyCode(invitation.code)}
-                          className="p-1 text-gray-500 hover:text-gray-700 hover:bg-gray-100 rounded transition-colors"
-                          title="Copier le code"
+                          disabled={saving === p.id}
+                          onClick={() => updateField(p.id, { account_status: 'suspended' })}
+                          className="flex items-center gap-1 px-3 py-1.5 bg-red-100 text-red-700 rounded-lg hover:bg-red-200 text-xs font-medium disabled:opacity-50"
                         >
-                          <Copy size={16} />
+                          <UserX size={14} />
+                          Suspendre
                         </button>
-                        {copied === invitation.code && (
-                          <span className="text-xs text-green-600 font-medium">Copié!</span>
-                        )}
-                      </div>
+                      ) : (
+                        <button
+                          disabled={saving === p.id}
+                          onClick={() => updateField(p.id, { account_status: 'active' })}
+                          className="flex items-center gap-1 px-3 py-1.5 bg-green-100 text-green-700 rounded-lg hover:bg-green-200 text-xs font-medium disabled:opacity-50"
+                        >
+                          <UserCheck size={14} />
+                          Réactiver
+                        </button>
+                      )}
 
-                      <div className="flex items-center gap-2 flex-wrap">
-                        <span className={`px-2.5 py-0.5 rounded-full text-xs font-medium ${badge.color}`}>
-                          {badge.label}
-                        </span>
-
-                        {invitation.email && (
-                          <span className="text-xs text-gray-600 bg-gray-100 px-2 py-0.5 rounded">
-                            {invitation.email}
-                          </span>
-                        )}
-
-                        <span className="text-xs text-gray-500">
-                          Créé: {new Date(invitation.created_at).toLocaleDateString('fr-FR')}
-                        </span>
-
-                        {invitation.used && invitation.used_at && (
-                          <span className="text-xs text-green-600">
-                            Utilisé: {new Date(invitation.used_at).toLocaleDateString('fr-FR')}
-                          </span>
-                        )}
-                      </div>
-
-                      <p className="text-xs text-gray-500 mt-2">
-                        Expire: {new Date(invitation.expires_at).toLocaleDateString('fr-FR')}
-                      </p>
+                      {saving === p.id && (
+                        <span className="text-xs text-gray-400 italic animate-pulse">Sauvegarde...</span>
+                      )}
                     </div>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
 
-                    <button
-                      onClick={() => handleDeleteInvitation(invitation.id)}
-                      className="ml-2 p-2 text-red-600 hover:bg-red-50 rounded-lg transition-colors"
-                      title="Supprimer"
-                    >
-                      <Trash2 size={18} />
-                    </button>
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        )}
-      </div>
-
-      <div className="bg-amber-50 border border-amber-200 rounded-xl p-4">
-        <h3 className="font-semibold text-amber-900 mb-2 text-sm flex items-center gap-2">
-          <RotateCw size={16} />
-          Instructions
-        </h3>
-        <ul className="text-sm text-amber-800 space-y-1 list-disc list-inside">
-          <li>Générez un code pour chaque modérateur</li>
-          <li>Partagez le code via email ou message sécurisé</li>
-          <li>Le modérateur l'utilise pour créer son compte</li>
-          <li>Les codes expirent après 30 jours</li>
-        </ul>
-      </div>
+      <p className="text-xs text-gray-400 text-center">
+        {profiles.length} utilisateur{profiles.length > 1 ? 's' : ''} enregistré{profiles.length > 1 ? 's' : ''}
+      </p>
     </div>
   );
 }

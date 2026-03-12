@@ -7,8 +7,9 @@ interface AuthContextType {
   profile: Profile | null;
   loading: boolean;
   signIn: (email: string, password: string) => Promise<void>;
-  signUp: (email: string, password: string, role: 'student' | 'individual') => Promise<void>;
+  signUp: (email: string, password: string, role: 'student' | 'individual', phone?: string) => Promise<void>;
   signOut: () => Promise<void>;
+  refreshProfile: () => Promise<void>;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
@@ -44,16 +45,34 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   const fetchProfile = async (userId: string) => {
-    const { data, error } = await supabase
-      .from('profiles')
-      .select('*')
-      .eq('id', userId)
-      .maybeSingle();
+    // Quelques tentatives avec délai pour laisser le trigger SQL s'exécuter
+    for (let attempt = 0; attempt < 5; attempt++) {
+      const { data, error } = await supabase
+        .from('profiles')
+        .select('*')
+        .eq('id', userId)
+        .maybeSingle();
 
-    if (data) {
-      setProfile(data);
+      if (error) {
+        console.error('fetchProfile error:', error);
+        break;
+      }
+
+      if (data) {
+        setProfile(data);
+        setLoading(false);
+        return;
+      }
+
+      // Le trigger n'a pas encore créé le profil, on attend
+      await new Promise((r) => setTimeout(r, 300));
     }
+
     setLoading(false);
+  };
+
+  const refreshProfile = async () => {
+    if (user) await fetchProfile(user.id);
   };
 
   const signIn = async (email: string, password: string) => {
@@ -61,17 +80,37 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     if (error) throw error;
   };
 
-  const signUp = async (email: string, password: string, role: 'student' | 'individual') => {
-    const { data, error } = await supabase.auth.signUp({ email, password });
+  const signUp = async (
+    email: string,
+    password: string,
+    role: 'student' | 'individual',
+    phone?: string
+  ) => {
+    // On passe le rôle ET le téléphone dans les métadonnées
+    // Le trigger handle_new_user() les lit pour créer le profil
+    const { data, error } = await supabase.auth.signUp({
+      email,
+      password,
+      options: {
+        data: {
+          role,
+          ...(phone ? { phone } : {}),
+        },
+      },
+    });
+
     if (error) throw error;
 
+    // Sécurité supplémentaire : on force la mise à jour du profil
+    // au cas où le trigger aurait eu une race condition
     if (data.user) {
-      const { error: profileError } = await supabase
-        .from('profiles')
-        .update({ role })
-        .eq('id', data.user.id);
+      const updates: Record<string, string> = { role };
+      if (phone) updates.phone = phone;
 
-      if (profileError) throw profileError;
+      await supabase
+        .from('profiles')
+        .update(updates)
+        .eq('id', data.user.id);
     }
   };
 
@@ -81,7 +120,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   };
 
   return (
-    <AuthContext.Provider value={{ user, profile, loading, signIn, signUp, signOut }}>
+    <AuthContext.Provider value={{ user, profile, loading, signIn, signUp, signOut, refreshProfile }}>
       {children}
     </AuthContext.Provider>
   );
